@@ -1,0 +1,14 @@
+{
+  "PanAm": {
+    "1985": [
+      { "from": "New York", "to": "Londres", "aircraft": "747-100", "distance": "5567 km" },
+      { "from": "Paris", "to": "Tokyo", "aircraft": "747-200B", "distance": "9731 km" }
+    ]
+  },
+  "TWA": {
+    "1990": [
+      { "from": "Los Angeles", "to": "New York", "aircraft": "MD-82", "distance": "3936 km" },
+      { "from": "Chicago", "to": "Dallas", "aircraft": "747", "distance": "1305 km" }
+    ]
+  }
+}
