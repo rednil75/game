@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pan Am — Simulation (refonte)</title>
+  <link rel="stylesheet" href="style.css" />
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-sA+q3q8q+Qk6k6mM2yK1QZ+YqYpX0n0fZ7xjv0v+0vM=" crossorigin=""/>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>Pan Am — Simulation</h1>
+      <div class="top-stats">
+        <div>Année: <span id="year">—</span></div>
+        <div>Argent: <span id="money">—</span></div>
+        <div>Réputation: <span id="reputation">—</span></div>
+        <div>Prix carburant: <span id="fuelPrice">—</span></div>
+        <div>Flotte: <span id="fleet">—</span></div>
+      </div>
+      <div class="controls">
+        <button id="btn-next">Next Turn</button>
+        <button id="btn-save">Sauvegarder</button>
+        <button id="btn-load">Charger</button>
+        <button id="btn-reset">Réinitialiser</button>
+      </div>
+    </header>
+
+    <main>
+      <aside id="left-panel">
+        <section class="card">
+          <h2>Journal d'événements</h2>
+          <div id="event-log" class="event-log"></div>
+        </section>
+
+        <section class="card">
+          <h2>Magasin d'avions</h2>
+          <div id="plane-shop" class="plane-shop">Chargement...</div>
+        </section>
+
+        <section class="card" id="market-share" aria-live="polite">
+          <h2>Parts de marché</h2>
+          <div>Calcul en cours...</div>
+        </section>
+
+        <section class="card">
+          <h2>Détails sélection</h2>
+          <div id="detail-panel">Clique une route ou un avion sur la carte.</div>
+        </section>
+      </aside>
+
+      <section id="map-area">
+        <div id="map"></div>
+        <div id="floating-controls" class="floating-controls">
+          <div><strong>Actions rapides</strong></div>
+          <button onclick="window.buyPlanePrompt && window.buyPlanePrompt()">Acheter avion rapide</button>
+          <button onclick="document.getElementById('event-log').scrollTop=0">Aller au top du journal</button>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <small>Prototype éducatif — améliore la simulation, ajoute des fonctionnalités, amuse-toi !</small>
+    </footer>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-o9N1j7k+x7Wf8x7XGqKt8c4p1wQ4Yf3k2dV+v6mY5v0=" crossorigin=""></script>
+
+  <!-- Core scripts (préexistants) -->
+  <script src="main.js"></script>
+  <script src="map.js"></script>
+
+  <script>
+    // UI bindings and helpers to integrate with main.js
+    function addEvent(message) {
+      const log = document.getElementById('event-log');
+      const el = document.createElement('div');
+      el.className = 'event';
+      el.innerText = `${new Date().toLocaleDateString()} — ${message}`;
+      log.prepend(el);
+    }
+
+    // Hook buttons
+    document.getElementById('btn-next').addEventListener('click', ()=>{
+      try {
+        window.nextTurn();
+        addEvent('Turn avancé: année ' + document.getElementById('year').innerText);
+      } catch(e){ console.error(e); }
+    });
+
+    document.getElementById('btn-save').addEventListener('click', ()=>{
+      try {
+        const state = {
+          year: window.GAME_STATE?.year ?? null,
+          money: window.money ?? null,
+          reputation: window.reputation ?? null,
+          fuelPrice: window.fuelPrice ?? null,
+          fleet: window.GAME_STATE?.fleet ?? null,
+          openRoutes: window.GAME_STATE?.openRoutes ?? null,
+          globalEvents: window.globalEvents ?? null
+        };
+        localStorage.setItem('panam_save', JSON.stringify(state));
+        addEvent('Partie sauvegardée');
+      } catch(e){ console.error(e); alert('Erreur sauvegarde'); }
+    });
+
+    document.getElementById('btn-load').addEventListener('click', ()=>{
+      const raw = localStorage.getItem('panam_save');
+      if (!raw) return alert('Aucune sauvegarde trouvée');
+      try {
+        const s = JSON.parse(raw);
+        // restore a few globals (main.js keeps authoritative structures)
+        if (s.money !== null) window.money = s.money;
+        if (s.reputation !== null) window.reputation = s.reputation;
+        if (s.fuelPrice !== null) window.fuelPrice = s.fuelPrice;
+        if (s.year !== null) window.year = s.year;
+        if (s.globalEvents) window.globalEvents = s.globalEvents;
+        // fleet and openRoutes require main.js structures; attempt to copy
+        if (s.fleet) {
+          // replace counts and ages where possible
+          s.fleet.forEach(f => {
+            const local = window.GAME_STATE.fleet.find(x=>x.model===f.model);
+            if (local) { local.count = f.count; local.age = f.age || local.age; }
+          });
+        }
+        if (s.openRoutes) {
+          Object.keys(s.openRoutes).forEach(k=>{
+            if (window.GAME_STATE.openRoutes[k]) window.GAME_STATE.openRoutes[k] = s.openRoutes[k];
+          });
+        }
+        if (window.updateUI) window.updateUI();
+        addEvent('Partie chargée');
+      } catch(e){ console.error(e); alert('Erreur chargement'); }
+    });
+
+    document.getElementById('btn-reset').addEventListener('click', ()=>{
+      if (!confirm('Réinitialiser la partie ?')) return;
+      localStorage.removeItem('panam_save');
+      location.reload();
+    });
+
+    // Plane shop rendering when GAME_STATE ready
+    function renderPlaneShop() {
+      const shop = document.getElementById('plane-shop');
+      const state = window.GAME_STATE;
+      if (!state || !state.fleet) { shop.innerText = 'Données manquantes'; return; }
+      shop.innerHTML = '';
+      state.fleet.forEach(p => {
+        const item = document.createElement('div');
+        item.className = 'plane-item';
+        item.innerHTML = `<strong>${p.model}</strong> — Prix: $${(p.value||0).toLocaleString()} — Capacité: ${p.capacity||'n/a'} — Age: ${p.age||0} — Count: ${p.count||0}
+          <div class="plane-actions">
+            <button onclick="window.buyPlane('${p.model}')">Acheter</button>
+            <button onclick="inspectPlane('${p.model}')">Détails</button>
+          </div>`;
+        shop.appendChild(item);
+      });
+      // quick buy prompt helper
+      window.buyPlanePrompt = ()=>{
+        const model = prompt('Modèle à acheter (ex: Boeing 747):');
+        if (model) window.buyPlane(model);
+      };
+    }
+
+    function inspectPlane(modelId) {
+      const state = window.GAME_STATE;
+      const p = state.fleet.find(x=>x.model===modelId);
+      if (!p) return alert('Modèle introuvable');
+      const panel = document.getElementById('detail-panel');
+      panel.innerHTML = `<h3>${p.model}</h3>
+        <div>Valeur: $${(p.value||0).toLocaleString()}</div>
+        <div>Capacité: ${p.capacity||'n/a'}</div>
+        <div>Vitesse: ${p.speed||'n/a'}</div>
+        <div>Consommation: ${p.fuel_usage||'n/a'}</div>
+        <div>Âge: ${p.age||0}</div>
+        <div>En flotte: ${p.count||0}</div>
+        <div class="plane-actions"><button onclick="sellPlanePrompt('${p.model}')">Vendre un exemplaire</button></div>`;
+    }
+
+    function sellPlanePrompt(modelId) {
+      if (!confirm('Vendre un exemplaire de ' + modelId + ' ?')) return;
+      // simple sale: refund 60% of value
+      const p = window.GAME_STATE.fleet.find(x=>x.model===modelId);
+      if (!p || (p.count||0)<=0) return alert('Aucun avion disponible à la vente');
+      const refund = Math.round((p.value||0)*0.6);
+      p.count -= 1;
+      window.money = (window.money||0) + refund;
+      if (window.updateUI) window.updateUI();
+      addEvent('Vente: ' + modelId + ' — +' + refund.toLocaleString() + '$');
+    }
+
+    // Observe GAME_STATE readiness to render shop & events
+    const checkReady = setInterval(()=>{
+      if (window.GAME_STATE && window.updateUI) {
+        renderPlaneShop();
+        if (window.globalEvents) {
+          // dump any existing events into log
+          (window.globalEvents||[]).forEach(ev => addEvent(JSON.stringify(ev)));
+        }
+        clearInterval(checkReady);
+      }
+    }, 200);
+
+    // Map interaction: show route details in left panel when clicked (map.js triggers popup)
+    window.onRouteSelected = function(html) {
+      const panel = document.getElementById('detail-panel');
+      panel.innerHTML = html;
+    };
+
+    // Minimal styling tweak for map height after load
+    window.addEventListener('load', ()=>{
+      document.getElementById('map').style.height = (window.innerHeight - 160) + 'px';
+    });
+    window.addEventListener('resize', ()=>{
+      document.getElementById('map').style.height = (window.innerHeight - 160) + 'px';
+    });
+  
+  <script>
+    // Bind difficulty select and scenario start (existing elements)
+    const diffSel = document.getElementById('difficulty-select');
+    diffSel.addEventListener('change', ()=>{ window.setDifficulty(diffSel.value); });
+
+    const scenarioSel = document.getElementById('scenario-select');
+    document.getElementById('btn-start-scenario').addEventListener('click', ()=>{
+      const v = scenarioSel.value;
+      if (window.startScenario) window.startScenario(v);
+    });
+
+    // Tutorial button
+    document.getElementById('btn-start-tutorial').addEventListener('click', ()=>{
+      if (window.startTutorial) window.startTutorial();
+      else alert('Tutoriel indisponible');
+    });
+
+    // Simple popup UI used by tutorial (create if missing)
+    function ensurePopup() {
+      if (document.getElementById('tutorial-popup')) return;
+      const p = document.createElement('div');
+      p.id = 'tutorial-popup';
+      p.className = 'tutorial-popup';
+      p.innerHTML = '<div class="tp-title" id="tp-title"></div><div class="tp-body" id="tp-body"></div><button id="tp-next">Suivant</button>';
+      document.body.appendChild(p);
+      document.getElementById('tp-next').addEventListener('click', ()=>{
+        if (window.nextTutorialStep) window.nextTutorialStep(); // from main.js
+        // update content if still active
+        if (window.tutorialActive && window.tutorialStep!=undefined) {
+          const s = window.TUTORIAL_STEPS ? window.TUTORIAL_STEPS[window.tutorialStep] : null;
+          if (s) { document.getElementById('tp-title').innerText = s.title; document.getElementById('tp-body').innerText = s.text; }
+        } else { p.style.display='none'; }
+      });
+    }
+    // popup helpers for main.js to call
+    window.showPopup = (title, text, cb)=>{
+      ensurePopup();
+      const p = document.getElementById('tutorial-popup');
+      p.style.display = 'block';
+      document.getElementById('tp-title').innerText = title;
+      document.getElementById('tp-body').innerText = text;
+      // next button will call nextTutorialStep in main.js
+    };
+    window.hidePopup = ()=>{ const p = document.getElementById('tutorial-popup'); if (p) p.style.display='none'; };
+
+    // Market share render hook will be called from main.js; ensure initial call
+    const msInterval = setInterval(()=>{ if (window.renderMarketShare) { window.renderMarketShare(); clearInterval(msInterval); } }, 300);
+  </script>
+  <style>
+    /* tutorial popup minimal styling */
+    .tutorial-popup { position: fixed; right: 24px; bottom: 24px; z-index:10000; background: rgba(10,12,18,0.95); color:#fff; padding:12px; border-radius:8px; max-width:320px; box-shadow:0 6px 18px rgba(0,0,0,0.5); display:none; }
+    .tutorial-popup .tp-title{ font-weight:700; margin-bottom:8px }
+    .tutorial-popup .tp-body{ font-size:13px; color:#dbeafe; margin-bottom:8px }
+    .tutorial-popup button{ padding:6px 10px; border-radius:6px; border:0; background:#1e90ff; color:#fff; cursor:pointer }
+    .market-table{ width:100%; border-collapse:collapse }
+    .market-table th, .market-table td{ text-align:left; padding:6px; font-size:13px; color:#dbeafe }
+    .market-table tr:nth-child(odd){ background: rgba(255,255,255,0.01) }
+  </style>
+</script>
+</body>
+</html>
